@@ -92,14 +92,14 @@ def _generate_invariants(sources):
 Return an array of the indices of `sources` that correspond to each invariant,
 arranged as described in _arrangetriplet.
 """
-    from scipy.spatial import KDTree
+    from scipy.spatial import cKDTree
     from itertools import combinations
     from functools import partial
     arrange = partial(_arrangetriplet, sources=sources)
 
     inv = []
     triang_vrtx = []
-    coordtree = KDTree(sources)
+    coordtree = cKDTree(sources)
     for asrc in sources:
         __, indx = coordtree.query(asrc, NUM_NEAREST_NEIGHBORS)
 
@@ -150,7 +150,7 @@ class _MatchTransform:
         return error
 
 
-def find_transform(source, target):
+def find_transform(source, target, sigma_thresh=3.0, bkg_rms=None):
     """Estimate the transform between ``source`` and ``target``.
 
     Return a SimilarityTransform object ``T`` that maps pixel x, y indices from
@@ -176,7 +176,7 @@ def find_transform(source, target):
         TypeError: If input type of ``source`` or ``target`` is not supported.
         Exception: If it cannot find more than 3 stars on any input.
     """
-    from scipy.spatial import KDTree
+    from scipy.spatial import cKDTree
 
     try:
         if len(source[0]) == 2:
@@ -184,7 +184,9 @@ def find_transform(source, target):
             source_controlp = _np.array(source)[:MAX_CONTROL_POINTS]
         else:
             # Assume it's a 2D image
-            source_controlp = _find_sources(source)[:MAX_CONTROL_POINTS]
+            source_controlp = _find_sources(source, 
+                                            sigma_thresh=sigma_thresh,
+                                            bkg_rms=bkg_rms)[:MAX_CONTROL_POINTS]
     except:
         raise TypeError('Input type for source not supported.')
 
@@ -194,7 +196,9 @@ def find_transform(source, target):
             target_controlp = _np.array(target)[:MAX_CONTROL_POINTS]
         else:
             # Assume it's a 2D image
-            target_controlp = _find_sources(target)[:MAX_CONTROL_POINTS]
+            target_controlp = _find_sources(target,
+                                            sigma_thresh=sigma_thresh
+                                            bkg_rms=bkg_rms)[:MAX_CONTROL_POINTS]
     except:
         raise TypeError('Input type for target not supported.')
 
@@ -207,10 +211,10 @@ def find_transform(source, target):
                         "minimum value (3).")
 
     source_invariants, source_asterisms = _generate_invariants(source_controlp)
-    source_invariant_tree = KDTree(source_invariants)
+    source_invariant_tree = cKDTree(source_invariants)
 
     target_invariants, target_asterisms = _generate_invariants(target_controlp)
-    target_invariant_tree = KDTree(target_invariants)
+    target_invariant_tree = cKDTree(target_invariants)
 
     # r = 0.03 is the maximum search distance, 0.03 is an empirical value that
     # returns about the same number of matches than inputs
@@ -289,7 +293,7 @@ def apply_transform(transform, source, target):
     return aligned_image
 
 
-def register(source, target):
+def register(source, target, sigma_thresh=3., bkg_rms=None):
     """Transform ``source`` to coincide pixel to pixel with ``target``.
 
     Args:
@@ -303,7 +307,8 @@ def register(source, target):
         the returned image will also be a masked array with outside pixels set
         to True.
     """
-    t, __ = find_transform(source=source, target=target)
+    t, __ = find_transform(source=source, target=target, 
+                           sigma_thresh=sigma_thresh, bkg_rms=bkg_rms)
     aligned_image = apply_transform(t, source, target)
     return aligned_image
 
@@ -314,13 +319,15 @@ def align_image(ref_image, img2transf, n_ref_src=50, n_img_src=70, px_tol=2.):
 
 
 def find_affine_transform(test_srcs, ref_srcs, max_pix_tol=2.,
-                          min_matches_fraction=0.8, invariant_map=None):
+                          min_matches_fraction=0.8, invariant_map=None,
+                          sigma_thresh=3., bkg_rms=None):
     "Deprecated: Alias for ``find_transform`` for backwards compatibility."
-    transf, _ = find_transform(ref_srcs, test_srcs)
+    transf, _ = find_transform(ref_srcs, test_srcs, 
+                               sigma_thresh=sigma_thresh, bkg_rms=bkg_rms)
     return transf.params
 
 
-def _find_sources(img):
+def _find_sources(img, sigma_thresh=3., bkg_rms=None):
     "Return sources (x, y) sorted by brightness."
 
     import sep
@@ -328,9 +335,13 @@ def _find_sources(img):
         image = img.filled(fill_value=_np.median(img)).astype('float32')
     else:
         image = img.astype('float32')
-    bkg = sep.Background(image)
-    thresh = 3. * bkg.globalrms
-    sources = sep.extract(image - bkg.back(), thresh)
+    if not bkg_rms:    
+        bkg = sep.Background(image)
+        thresh = sigma_thresh * bkg.globalrms
+        sources = sep.extract(image - bkg.back(), thresh)
+    else: 
+        thresh = sigma_thresh * bkg_rms
+        sources = sep.extract(image, thresh)
     sources.sort(order='flux')
     return _np.array([[asrc['x'], asrc['y']] for asrc in sources[::-1]])
 
